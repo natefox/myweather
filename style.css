@@ -21,6 +21,20 @@
   --wind-strong: #e83;
   --wind-very-strong: #e44;
 
+  --swell-flat: #3a6b8c;
+  --swell-small: #4a9;
+  --swell-medium: #3b8;
+  --swell-large: #e83;
+  --swell-xl: #e44;
+
+  --temp-cold: #55a;
+  --temp-cool: #4a9;
+  --temp-mild: #6b5;
+  --temp-warm: #e83;
+  --temp-hot: #e44;
+
+  --precip-rain: #47e;
+
   --cell-width-detailed: 38px;
   --cell-width-summary: 72px;
   --model-col-width: 110px;
@@ -264,6 +278,29 @@ body {
 
 .grid-container--summary .wind-cell__gust {
   font-size: 12px;
+}
+
+/* Section headers */
+.section-row .section-label {
+  font-weight: 700;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--color-accent);
+  background: var(--color-surface);
+}
+
+.section-row .section-spacer {
+  background: var(--color-surface);
+  border-bottom: 2px solid var(--color-accent);
+  height: 4px;
+  padding: 0;
+}
+
+/* Weather icons row */
+.wx-cell {
+  font-size: 14px;
+  padding: 1px !important;
 }
 
 /* Responsive */

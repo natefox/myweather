@@ -167,6 +167,7 @@ function render() {
   const hourRow = document.createElement("tr");
   const hourCorner = document.createElement("th");
   hourCorner.className = "hour-header model-cell";
+  hourCorner.textContent = "mph";
   hourRow.appendChild(hourCorner);
 
   for (const idx of indices) {
@@ -342,6 +343,10 @@ function init() {
   populateSpotDropdown();
   loadSavedSpot();
   bindEvents();
+  if (window.innerWidth <= 600) {
+    state.viewMode = "summary";
+    updateViewToggle();
+  }
   loadForecast();
 }
 

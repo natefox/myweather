@@ -7,9 +7,9 @@ const SPOTS = [
 const MODELS = [
   { id: "ncep_hrrr_conus", label: "HRRR", res: "3km" },
   { id: "ncep_nam_conus", label: "NAM", res: "12km" },
-  { id: "dwd_icon_global", label: "ICON", res: "11km" },
-  { id: "ncep_gfs_global_0p25", label: "GFS", res: "25km" },
-  { id: "ecmwf_ifs_025", label: "ECMWF", res: "25km" },
+  { id: "icon_global", label: "ICON", res: "11km" },
+  { id: "gfs_seamless", label: "GFS", res: "25km" },
+  { id: "ecmwf_ifs025", label: "ECMWF", res: "25km" },
 ];
 
 const API_BASE = "https://api.open-meteo.com/v1/forecast";
@@ -50,10 +50,10 @@ function parseResponse(json) {
   const parsedTimes = timeStrings.map((t) => new Date(t));
 
   const models = MODELS.map((model) => {
-    const prefix = model.id + "_";
+    const suffix = "_" + model.id;
 
     function findKey(baseName) {
-      if (hourly[prefix + baseName] !== undefined) return prefix + baseName;
+      if (hourly[baseName + suffix] !== undefined) return baseName + suffix;
       if (hourly[baseName] !== undefined) return baseName;
       return null;
     }

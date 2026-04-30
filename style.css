@@ -303,9 +303,9 @@ body {
 
 .wind-cell__arrow {
   font-size: 10px;
-  display: block;
+  display: inline-block;
   line-height: 1;
-  margin: 2px 0;
+  margin: 0 1px;
 }
 
 .wind-cell__gust {

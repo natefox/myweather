@@ -68,7 +68,7 @@ function buildForecastUrl(loc) {
   const params = new URLSearchParams({
     latitude: loc.lat,
     longitude: loc.lon,
-    hourly: "wind_speed_10m,wind_gusts_10m,wind_direction_10m,temperature_2m,precipitation,weather_code",
+    hourly: "wind_speed_10m,wind_gusts_10m,wind_direction_10m,temperature_2m,precipitation,precipitation_probability,relative_humidity_2m,weather_code",
     models: WIND_MODELS.map((m) => m.id).join(","),
     wind_speed_unit: "mph",
     temperature_unit: "fahrenheit",
@@ -178,8 +178,10 @@ function parseForecastResponse(json) {
   // but if prefixed, grab from GFS as fallback
   const weatherCode = getArr(hourly, "weather_code", "gfs_seamless", len);
   const precip = getArr(hourly, "precipitation", "gfs_seamless", len);
+  const precipProb = getArr(hourly, "precipitation_probability", "gfs_seamless", len);
+  const humidity = getArr(hourly, "relative_humidity_2m", "gfs_seamless", len);
 
-  return { times, timeStrings, windModels, weatherCode, precip };
+  return { times, timeStrings, windModels, weatherCode, precip, precipProb, humidity };
 }
 
 function parseMarineResponse(json) {
@@ -352,7 +354,7 @@ function render() {
   if (!state.data) return;
 
   const { forecast, marine, tides, tideStationName } = state.data;
-  const { times, windModels, weatherCode, precip } = forecast;
+  const { times, windModels, weatherCode, precip, precipProb, humidity } = forecast;
   const isSummary = state.viewMode === "summary";
 
   const indices = [];
@@ -417,19 +419,48 @@ function render() {
   }
   table.appendChild(wxRow);
 
-  // ---- Rain ----
+  // ---- Rain chance % ----
+  const rainPctRow = document.createElement("tr");
+  rainPctRow.appendChild(Object.assign(document.createElement("td"), { className: "model-cell", textContent: "Rain %" }));
+  for (const idx of indices) {
+    const td = makeCell(idx, nowIdx);
+    const p = precipProb[idx];
+    if (p != null && p > 0) {
+      td.style.backgroundColor = `rgba(68, 119, 238, ${Math.min(p / 100, 1) * 0.8})`;
+      td.textContent = Math.round(p);
+    }
+    rainPctRow.appendChild(td);
+  }
+  table.appendChild(rainPctRow);
+
+  // ---- Rain amount ----
   const rainRow = document.createElement("tr");
   rainRow.appendChild(Object.assign(document.createElement("td"), { className: "model-cell", textContent: "Rain in" }));
   for (const idx of indices) {
     const td = makeCell(idx, nowIdx);
     const v = precip[idx];
-    if (v != null && v >= 0.01) {
+    if (v != null && v >= 0.005) {
       td.style.backgroundColor = "var(--precip-rain)";
-      td.textContent = v.toFixed(2);
+      td.textContent = v < 0.01 ? "tr" : v.toFixed(2);
     }
     rainRow.appendChild(td);
   }
   table.appendChild(rainRow);
+
+  // ---- Humidity % ----
+  const humRow = document.createElement("tr");
+  humRow.appendChild(Object.assign(document.createElement("td"), { className: "model-cell", textContent: "Humidity %" }));
+  for (const idx of indices) {
+    const td = makeCell(idx, nowIdx);
+    const h = humidity[idx];
+    if (h != null) {
+      const alpha = Math.min(h / 100, 1) * 0.6;
+      td.style.backgroundColor = `rgba(68, 119, 238, ${alpha})`;
+      td.textContent = Math.round(h);
+    }
+    humRow.appendChild(td);
+  }
+  table.appendChild(humRow);
 
   // ---- Temp section ----
   addSectionHeader(table, "Temp °F", indices.length);
@@ -579,12 +610,28 @@ function render() {
 
   container.appendChild(table);
 
-  // Offshore/onshore highlight for current hour
+  // Offshore/onshore/epic highlight for current hour
   const nowDirs = windModels.map((m) => m.dirs[nowIdx]).filter((d) => d != null);
-  container.classList.remove("grid-container--offshore", "grid-container--onshore", "grid-container--cross");
-  if (nowDirs.length > 0) {
-    const type = shoreType(circularMean(nowDirs));
-    if (type) container.classList.add("grid-container--" + type);
+  const nowSpeeds = windModels.map((m) => m.speeds[nowIdx]).filter((s) => s != null);
+  const avgSpeed = nowSpeeds.length ? nowSpeeds.reduce((a, b) => a + b, 0) / nowSpeeds.length : 0;
+  const windType = nowDirs.length ? shoreType(circularMean(nowDirs)) : null;
+
+  let ecmwfWaveHeight = null;
+  if (marine) {
+    const wam = marine.marineModels.find((m) => m.id === "ecmwf_wam025");
+    if (wam) {
+      const mi = mIdx(nowIdx);
+      if (mi !== undefined) ecmwfWaveHeight = wam.waveHeight[mi];
+    }
+  }
+
+  const isEpic = windType === "offshore" && avgSpeed >= 5 && ecmwfWaveHeight != null && ecmwfWaveHeight > 4;
+
+  container.classList.remove("grid-container--offshore", "grid-container--onshore", "grid-container--cross", "grid-container--epic");
+  if (isEpic) {
+    container.classList.add("grid-container--epic");
+  } else if (windType) {
+    container.classList.add("grid-container--" + windType);
   }
 
   // Auto-scroll to now

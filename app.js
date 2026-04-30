@@ -519,10 +519,7 @@ function render() {
       const arrowSpan = document.createElement("span");
       arrowSpan.className = "wind-cell__arrow";
       arrowSpan.textContent = dirArrow(dir);
-      if (dir != null) {
-        arrowSpan.style.display = "inline-block";
-        arrowSpan.style.transform = dirRotation(dir);
-      }
+      if (dir != null) arrowSpan.style.transform = dirRotation(dir);
       td.appendChild(arrowSpan);
 
       if (gust != null) {
@@ -576,7 +573,6 @@ function render() {
           const arrowSpan = document.createElement("span");
           arrowSpan.className = "wind-cell__arrow";
           arrowSpan.textContent = "↓";
-          arrowSpan.style.display = "inline-block";
           arrowSpan.style.transform = dirRotation(sd);
           td.appendChild(arrowSpan);
         }

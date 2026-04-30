@@ -17,6 +17,7 @@ const MARINE_MODELS = [
 const API_BASE = "https://api.open-meteo.com/v1/forecast";
 const MARINE_API_BASE = "https://marine-api.open-meteo.com/v1/marine";
 const STORAGE_KEY = "myweather-location";
+const VIEW_MODE_KEY = "myweather-view-mode";
 const SHORE_NORMAL_KEY = "myweather-shore-normal";
 const DEFAULT_SHORE_NORMAL = 225;
 const TIDE_CACHE_KEY = "myweather-tide-station";
@@ -607,6 +608,13 @@ function updateLocationDisplay() {
   }
 }
 
+function setViewMode(mode) {
+  state.viewMode = mode;
+  localStorage.setItem(VIEW_MODE_KEY, mode);
+  history.replaceState(null, "", "#" + mode);
+  updateViewToggle();
+}
+
 function updateViewToggle() {
   const btnD = document.getElementById("btn-detailed");
   const btnS = document.getElementById("btn-summary");
@@ -617,8 +625,12 @@ function updateViewToggle() {
 }
 
 function bindEvents() {
-  document.getElementById("btn-detailed").addEventListener("click", () => { state.viewMode = "detailed"; updateViewToggle(); render(); });
-  document.getElementById("btn-summary").addEventListener("click", () => { state.viewMode = "summary"; updateViewToggle(); render(); });
+  document.getElementById("btn-detailed").addEventListener("click", () => { setViewMode("detailed"); render(); });
+  document.getElementById("btn-summary").addEventListener("click", () => { setViewMode("summary"); render(); });
+  window.addEventListener("hashchange", () => {
+    const hash = location.hash.replace("#", "");
+    if (hash === "detailed" || hash === "summary") { setViewMode(hash); render(); }
+  });
   document.getElementById("retry-btn").addEventListener("click", () => loadForecast());
   document.getElementById("update-location-btn").addEventListener("click", async () => { await detectAndSetLocation(); loadForecast(); });
 }
@@ -686,7 +698,16 @@ async function detectAndSetLocation() {
 
 async function init() {
   bindEvents();
-  if (window.innerWidth <= 600) { state.viewMode = "summary"; updateViewToggle(); }
+  const hash = location.hash.replace("#", "");
+  if (hash === "detailed" || hash === "summary") {
+    state.viewMode = hash;
+  } else {
+    const savedView = localStorage.getItem(VIEW_MODE_KEY);
+    if (savedView === "detailed" || savedView === "summary") state.viewMode = savedView;
+    else if (window.innerWidth <= 600) state.viewMode = "summary";
+  }
+  updateViewToggle();
+  history.replaceState(null, "", "#" + state.viewMode);
   const saved = getSavedLocation();
   if (saved) { state.location = saved; updateLocationDisplay(); loadForecast(); }
   else { await detectAndSetLocation(); loadForecast(); }

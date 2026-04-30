@@ -605,6 +605,7 @@ function render() {
       const sub = document.createElement("span");
       sub.className = "tide-station-name";
       sub.textContent = tideStationName;
+      sub.title = tideStationName;
       labelTd.appendChild(sub);
     }
     tr.appendChild(labelTd);

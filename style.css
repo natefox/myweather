@@ -58,13 +58,23 @@ body {
   gap: 12px;
 }
 
-.spot-select {
-  padding: 4px 8px;
-  border-radius: 4px;
+.location-display {
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+
+.update-location-btn {
+  background: none;
   border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  color: var(--color-text);
+  border-radius: 4px;
+  padding: 2px 6px;
+  cursor: pointer;
   font-size: 14px;
+  line-height: 1;
+}
+
+.update-location-btn:hover {
+  border-color: var(--color-accent);
 }
 
 .last-updated {

@@ -1,9 +1,5 @@
 "use strict";
 
-const SPOTS = [
-  { name: "Home Break", lat: 33.65872, lon: -117.95903, tz: "America/Los_Angeles" },
-];
-
 const MODELS = [
   { id: "ncep_hrrr_conus", label: "HRRR", res: "3km" },
   { id: "ncep_nam_conus", label: "NAM", res: "12km" },
@@ -13,30 +9,63 @@ const MODELS = [
 ];
 
 const API_BASE = "https://api.open-meteo.com/v1/forecast";
+const STORAGE_KEY = "myweather-location";
 
 let state = {
-  spotIndex: 0,
+  location: null, // { lat, lon, tz }
   viewMode: "detailed",
   data: null,
 };
 
+// --------------- Location ---------------
+
+function getSavedLocation() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch (e) {}
+  return null;
+}
+
+function saveLocation(loc) {
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(loc));
+}
+
+function requestGeolocation() {
+  return new Promise((resolve, reject) => {
+    if (!navigator.geolocation) {
+      reject(new Error("Geolocation not supported"));
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => resolve({ lat: pos.coords.latitude, lon: pos.coords.longitude }),
+      (err) => reject(err),
+      { timeout: 10000 }
+    );
+  });
+}
+
+function detectTimezone() {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
 // --------------- API Layer ---------------
 
-function buildApiUrl(spot) {
+function buildApiUrl(loc) {
   const params = new URLSearchParams({
-    latitude: spot.lat,
-    longitude: spot.lon,
+    latitude: loc.lat,
+    longitude: loc.lon,
     hourly: "wind_speed_10m,wind_gusts_10m,wind_direction_10m",
     models: MODELS.map((m) => m.id).join(","),
     wind_speed_unit: "mph",
-    timezone: spot.tz,
+    timezone: loc.tz,
     forecast_days: 16,
   });
   return `${API_BASE}?${params.toString()}`;
 }
 
-async function fetchForecast(spot) {
-  const url = buildApiUrl(spot);
+async function fetchForecast(loc) {
+  const url = buildApiUrl(loc);
   const res = await fetch(url);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   return res.json();
@@ -104,14 +133,12 @@ function render() {
   const { times, models } = state.data;
   const isSummary = state.viewMode === "summary";
 
-  // 1. Filter time indices
   const indices = [];
   for (let i = 0; i < times.length; i++) {
     if (isSummary && times[i].getHours() % 3 !== 0) continue;
     indices.push(i);
   }
 
-  // 2. Group indices by day
   const dayGroups = [];
   let currentDayLabel = null;
   for (const idx of indices) {
@@ -128,7 +155,6 @@ function render() {
     }
   }
 
-  // 3. Find current hour index
   const now = new Date();
   let currentHourIdx = indices[0];
   let minDiff = Math.abs(times[indices[0]] - now);
@@ -140,11 +166,9 @@ function render() {
     }
   }
 
-  // Build table
   const table = document.createElement("table");
   table.className = "forecast-table";
 
-  // 4. Day header row
   const dayRow = document.createElement("tr");
   const dayCorner = document.createElement("th");
   dayCorner.className = "day-header model-cell";
@@ -155,7 +179,6 @@ function render() {
     th.className = "day-header";
     th.colSpan = group.indices.length;
     th.textContent = group.label;
-    // Check if current hour falls in this day group
     if (group.indices.includes(currentHourIdx)) {
       th.classList.add("day-header--now");
     }
@@ -163,7 +186,6 @@ function render() {
   }
   table.appendChild(dayRow);
 
-  // 5. Hour header row
   const hourRow = document.createElement("tr");
   const hourCorner = document.createElement("th");
   hourCorner.className = "hour-header model-cell";
@@ -184,7 +206,6 @@ function render() {
   }
   table.appendChild(hourRow);
 
-  // 6. Model data rows
   for (const model of models) {
     const tr = document.createElement("tr");
 
@@ -241,7 +262,6 @@ function render() {
 
   container.appendChild(table);
 
-  // 7. Auto-scroll to current hour
   const nowCell =
     container.querySelector(".wind-cell--now") ||
     container.querySelector(".hour-header--now");
@@ -253,26 +273,15 @@ function render() {
   }
 }
 
-// --------------- Init & Event Handling ---------------
+// --------------- UI ---------------
 
-function populateSpotDropdown() {
-  const select = document.getElementById("spot-select");
-  SPOTS.forEach((spot, i) => {
-    const opt = document.createElement("option");
-    opt.value = i;
-    opt.textContent = spot.name;
-    select.appendChild(opt);
-  });
-}
-
-function loadSavedSpot() {
-  const saved = localStorage.getItem("myweather-spot");
-  if (saved !== null) {
-    const idx = parseInt(saved, 10);
-    if (idx >= 0 && idx < SPOTS.length) {
-      state.spotIndex = idx;
-      document.getElementById("spot-select").value = idx;
-    }
+function updateLocationDisplay() {
+  const el = document.getElementById("location-display");
+  if (state.location) {
+    el.textContent = `${state.location.lat.toFixed(2)}, ${state.location.lon.toFixed(2)}`;
+    el.title = `${state.location.lat}, ${state.location.lon}`;
+  } else {
+    el.textContent = "";
   }
 }
 
@@ -287,12 +296,6 @@ function updateViewToggle() {
 }
 
 function bindEvents() {
-  document.getElementById("spot-select").addEventListener("change", (e) => {
-    state.spotIndex = parseInt(e.target.value, 10);
-    localStorage.setItem("myweather-spot", state.spotIndex);
-    loadForecast();
-  });
-
   document.getElementById("btn-detailed").addEventListener("click", () => {
     state.viewMode = "detailed";
     updateViewToggle();
@@ -308,9 +311,16 @@ function bindEvents() {
   document.getElementById("retry-btn").addEventListener("click", () => {
     loadForecast();
   });
+
+  document.getElementById("update-location-btn").addEventListener("click", async () => {
+    await detectAndSetLocation();
+    loadForecast();
+  });
 }
 
 async function loadForecast() {
+  if (!state.location) return;
+
   const loading = document.getElementById("loading");
   const error = document.getElementById("error");
   const container = document.getElementById("grid-container");
@@ -321,8 +331,7 @@ async function loadForecast() {
   if (existing) existing.remove();
 
   try {
-    const spot = SPOTS[state.spotIndex];
-    const json = await fetchForecast(spot);
+    const json = await fetchForecast(state.location);
     state.data = parseResponse(json);
 
     const now = new Date();
@@ -339,15 +348,44 @@ async function loadForecast() {
   }
 }
 
-function init() {
-  populateSpotDropdown();
-  loadSavedSpot();
+async function detectAndSetLocation() {
+  const loading = document.getElementById("loading");
+  loading.hidden = false;
+  loading.textContent = "Detecting your location…";
+
+  try {
+    const coords = await requestGeolocation();
+    state.location = { lat: coords.lat, lon: coords.lon, tz: detectTimezone() };
+    saveLocation(state.location);
+    updateLocationDisplay();
+    loading.textContent = "Loading forecast data…";
+  } catch (err) {
+    console.error("Geolocation failed:", err);
+    loading.textContent = "Loading forecast data…";
+    loading.hidden = true;
+    const error = document.getElementById("error");
+    error.querySelector("p").textContent =
+      "Location access denied. Please allow location access and try again.";
+    error.hidden = false;
+  }
+}
+
+async function init() {
   bindEvents();
   if (window.innerWidth <= 600) {
     state.viewMode = "summary";
     updateViewToggle();
   }
-  loadForecast();
+
+  const saved = getSavedLocation();
+  if (saved) {
+    state.location = saved;
+    updateLocationDisplay();
+    loadForecast();
+  } else {
+    await detectAndSetLocation();
+    loadForecast();
+  }
 }
 
 init();

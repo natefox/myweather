@@ -19,9 +19,9 @@ const MARINE_API_BASE = "https://marine-api.open-meteo.com/v1/marine";
 const STORAGE_KEY = "myweather-location";
 const SHORE_NORMAL_KEY = "myweather-shore-normal";
 const DEFAULT_SHORE_NORMAL = 225;
-const TIDE_STATION_KEY = "myweather-tide-station";
-const DEFAULT_TIDE_STATION = "9410580";
+const TIDE_CACHE_KEY = "myweather-tide-station";
 const NOAA_TIDE_BASE = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter";
+const NOAA_STATIONS_URL = "https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=tidepredictions";
 
 let state = {
   location: null,
@@ -90,22 +90,35 @@ function buildMarineUrl(loc) {
   return `${MARINE_API_BASE}?${params.toString()}`;
 }
 
-function getTideStation() {
+async function findNearestTideStation(lat, lon) {
+  const cacheKey = `${lat.toFixed(2)},${lon.toFixed(2)}`;
   try {
-    const saved = localStorage.getItem(TIDE_STATION_KEY);
-    if (saved) return saved;
+    const cached = JSON.parse(localStorage.getItem(TIDE_CACHE_KEY));
+    if (cached && cached.key === cacheKey) return cached;
   } catch (e) {}
-  return DEFAULT_TIDE_STATION;
+
+  const json = await fetchJson(NOAA_STATIONS_URL);
+  let best = null, bestDist = Infinity;
+  for (const s of json.stations) {
+    const dlat = s.lat - lat;
+    const dlon = s.lng - lon;
+    const dist = dlat * dlat + dlon * dlon;
+    if (dist < bestDist) { bestDist = dist; best = s; }
+  }
+
+  const result = { key: cacheKey, id: best.id, name: best.name };
+  localStorage.setItem(TIDE_CACHE_KEY, JSON.stringify(result));
+  return result;
 }
 
-function buildTideUrl() {
+function buildTideUrl(stationId) {
   const now = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   const beginDate = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
   const params = new URLSearchParams({
     begin_date: beginDate,
     range: 384,
-    station: getTideStation(),
+    station: stationId,
     product: "predictions",
     datum: "MLLW",
     units: "english",
@@ -337,7 +350,7 @@ function render() {
   if (existing) existing.remove();
   if (!state.data) return;
 
-  const { forecast, marine, tides } = state.data;
+  const { forecast, marine, tides, tideStationName } = state.data;
   const { times, windModels, weatherCode, precip } = forecast;
   const isSummary = state.viewMode === "summary";
 
@@ -544,7 +557,8 @@ function render() {
   if (tides && tides.size > 0) {
     addSectionHeader(table, "Tide ft", indices.length);
     const tr = document.createElement("tr");
-    tr.appendChild(Object.assign(document.createElement("td"), { className: "model-cell", textContent: "NOAA" }));
+    const label = tideStationName || "NOAA";
+    tr.appendChild(Object.assign(document.createElement("td"), { className: "model-cell", textContent: label }));
     for (const idx of indices) {
       const level = tides.get(times[idx].getTime());
       if (level == null) {
@@ -623,16 +637,19 @@ async function loadForecast() {
 
   try {
     const loc = state.location;
+    const tideStation = await findNearestTideStation(loc.lat, loc.lon).catch(() => null);
+
     const [forecastJson, marineJson, tideJson] = await Promise.all([
       fetchJson(buildForecastUrl(loc)),
       fetchJson(buildMarineUrl(loc)).catch(() => null),
-      fetchJson(buildTideUrl()).catch(() => null),
+      tideStation ? fetchJson(buildTideUrl(tideStation.id)).catch(() => null) : null,
     ]);
 
     state.data = {
       forecast: parseForecastResponse(forecastJson),
       marine: marineJson ? parseMarineResponse(marineJson) : null,
       tides: tideJson ? parseTideResponse(tideJson) : null,
+      tideStationName: tideStation ? tideStation.name : null,
     };
 
     document.getElementById("last-updated").textContent =

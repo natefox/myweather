@@ -1,11 +1,17 @@
 "use strict";
 
-const MODELS = [
+const WIND_MODELS = [
   { id: "ncep_hrrr_conus", label: "HRRR", res: "3km" },
   { id: "ncep_nam_conus", label: "NAM", res: "12km" },
   { id: "icon_global", label: "ICON", res: "11km" },
   { id: "gfs_seamless", label: "GFS", res: "25km" },
   { id: "ecmwf_ifs025", label: "ECMWF", res: "25km" },
+];
+
+const MARINE_MODELS = [
+  { id: "ncep_gfswave025", label: "GFS Wave", res: "25km" },
+  { id: "ecmwf_wam025", label: "ECMWF WAM", res: "25km" },
+  { id: "meteofrance_wave", label: "MeteoFr", res: "10km" },
 ];
 
 const API_BASE = "https://api.open-meteo.com/v1/forecast";
@@ -52,24 +58,13 @@ function detectTimezone() {
 
 // --------------- API Layer ---------------
 
-function buildWindUrl(loc) {
+function buildForecastUrl(loc) {
   const params = new URLSearchParams({
     latitude: loc.lat,
     longitude: loc.lon,
-    hourly: "wind_speed_10m,wind_gusts_10m,wind_direction_10m",
-    models: MODELS.map((m) => m.id).join(","),
+    hourly: "wind_speed_10m,wind_gusts_10m,wind_direction_10m,temperature_2m,precipitation,weather_code",
+    models: WIND_MODELS.map((m) => m.id).join(","),
     wind_speed_unit: "mph",
-    timezone: loc.tz,
-    forecast_days: 16,
-  });
-  return `${API_BASE}?${params.toString()}`;
-}
-
-function buildWeatherUrl(loc) {
-  const params = new URLSearchParams({
-    latitude: loc.lat,
-    longitude: loc.lon,
-    hourly: "temperature_2m,precipitation,weather_code,cloud_cover",
     temperature_unit: "fahrenheit",
     precipitation_unit: "inch",
     timezone: loc.tz,
@@ -83,6 +78,7 @@ function buildMarineUrl(loc) {
     latitude: loc.lat,
     longitude: loc.lon,
     hourly: "wave_height,wave_period,wave_direction,swell_wave_height,swell_wave_period,swell_wave_direction",
+    models: MARINE_MODELS.map((m) => m.id).join(","),
     length_unit: "imperial",
     timezone: loc.tz,
   });
@@ -97,53 +93,56 @@ async function fetchJson(url) {
 
 // --------------- Data Parsing ---------------
 
-function parseWindResponse(json) {
-  const hourly = json.hourly;
-  const timeStrings = hourly.time;
-  const parsedTimes = timeStrings.map((t) => new Date(t));
-
-  const models = MODELS.map((model) => {
-    const suffix = "_" + model.id;
-    function findKey(baseName) {
-      if (hourly[baseName + suffix] !== undefined) return baseName + suffix;
-      if (hourly[baseName] !== undefined) return baseName;
-      return null;
-    }
-    const speedKey = findKey("wind_speed_10m");
-    const gustKey = findKey("wind_gusts_10m");
-    const dirKey = findKey("wind_direction_10m");
-    return {
-      ...model,
-      speeds: speedKey ? hourly[speedKey] : new Array(parsedTimes.length).fill(null),
-      gusts: gustKey ? hourly[gustKey] : new Array(parsedTimes.length).fill(null),
-      dirs: dirKey ? hourly[dirKey] : new Array(parsedTimes.length).fill(null),
-    };
-  });
-
-  return { times: parsedTimes, timeStrings, models };
+function findKey(hourly, baseName, modelId) {
+  const suffixed = baseName + "_" + modelId;
+  if (hourly[suffixed] !== undefined) return suffixed;
+  if (hourly[baseName] !== undefined) return baseName;
+  return null;
 }
 
-function parseWeatherResponse(json) {
-  const h = json.hourly;
-  return {
-    temps: h.temperature_2m || [],
-    precip: h.precipitation || [],
-    weatherCode: h.weather_code || [],
-    cloudCover: h.cloud_cover || [],
-  };
+function getArr(hourly, baseName, modelId, len) {
+  const key = findKey(hourly, baseName, modelId);
+  return key ? hourly[key] : new Array(len).fill(null);
+}
+
+function parseForecastResponse(json) {
+  const hourly = json.hourly;
+  const timeStrings = hourly.time;
+  const times = timeStrings.map((t) => new Date(t));
+  const len = times.length;
+
+  const windModels = WIND_MODELS.map((m) => ({
+    ...m,
+    speeds: getArr(hourly, "wind_speed_10m", m.id, len),
+    gusts: getArr(hourly, "wind_gusts_10m", m.id, len),
+    dirs: getArr(hourly, "wind_direction_10m", m.id, len),
+    temps: getArr(hourly, "temperature_2m", m.id, len),
+  }));
+
+  // Weather codes & precip come from best-match (no model prefix)
+  // but if prefixed, grab from GFS as fallback
+  const weatherCode = getArr(hourly, "weather_code", "gfs_seamless", len);
+  const precip = getArr(hourly, "precipitation", "gfs_seamless", len);
+
+  return { times, timeStrings, windModels, weatherCode, precip };
 }
 
 function parseMarineResponse(json) {
-  const h = json.hourly;
-  return {
-    times: (h.time || []).map((t) => new Date(t)),
-    waveHeight: h.wave_height || [],
-    wavePeriod: h.wave_period || [],
-    waveDir: h.wave_direction || [],
-    swellHeight: h.swell_wave_height || [],
-    swellPeriod: h.swell_wave_period || [],
-    swellDir: h.swell_wave_direction || [],
-  };
+  const hourly = json.hourly;
+  const times = (hourly.time || []).map((t) => new Date(t));
+  const len = times.length;
+
+  const marineModels = MARINE_MODELS.map((m) => ({
+    ...m,
+    waveHeight: getArr(hourly, "wave_height", m.id, len),
+    wavePeriod: getArr(hourly, "wave_period", m.id, len),
+    waveDir: getArr(hourly, "wave_direction", m.id, len),
+    swellHeight: getArr(hourly, "swell_wave_height", m.id, len),
+    swellPeriod: getArr(hourly, "swell_wave_period", m.id, len),
+    swellDir: getArr(hourly, "swell_wave_direction", m.id, len),
+  }));
+
+  return { times, marineModels };
 }
 
 // --------------- Display Helpers ---------------
@@ -203,36 +202,25 @@ function findCurrentHourIdx(times, indices) {
   let minDiff = Math.abs(times[indices[0]] - now);
   for (const idx of indices) {
     const diff = Math.abs(times[idx] - now);
-    if (diff < minDiff) {
-      minDiff = diff;
-      best = idx;
-    }
+    if (diff < minDiff) { minDiff = diff; best = idx; }
   }
   return best;
 }
 
 function buildDayGroups(times, indices) {
   const groups = [];
-  let currentLabel = null;
+  let cur = null;
   for (const idx of indices) {
-    const label = times[idx].toLocaleDateString("en-US", {
-      weekday: "short",
-      month: "short",
-      day: "numeric",
-    });
-    if (label !== currentLabel) {
-      currentLabel = label;
-      groups.push({ label, indices: [idx] });
-    } else {
-      groups[groups.length - 1].indices.push(idx);
-    }
+    const label = times[idx].toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+    if (label !== cur) { cur = label; groups.push({ label, indices: [idx] }); }
+    else groups[groups.length - 1].indices.push(idx);
   }
   return groups;
 }
 
-function addSectionHeader(table, label, colCount, extraClass) {
+function addSectionHeader(table, label, colCount) {
   const tr = document.createElement("tr");
-  tr.className = "section-row" + (extraClass ? " " + extraClass : "");
+  tr.className = "section-row";
   const labelTd = document.createElement("td");
   labelTd.className = "model-cell section-label";
   labelTd.textContent = label;
@@ -244,31 +232,18 @@ function addSectionHeader(table, label, colCount, extraClass) {
   table.appendChild(tr);
 }
 
-function addDataRow(table, label, indices, values, currentHourIdx, colorFn, formatFn, extraClass) {
-  const tr = document.createElement("tr");
-  if (extraClass) tr.className = extraClass;
+function makeCell(idx, currentHourIdx) {
+  const td = document.createElement("td");
+  td.className = "wind-cell";
+  if (idx === currentHourIdx) td.classList.add("wind-cell--now");
+  return td;
+}
 
-  const labelCell = document.createElement("td");
-  labelCell.className = "model-cell";
-  labelCell.textContent = label;
-  tr.appendChild(labelCell);
-
-  for (const idx of indices) {
-    const td = document.createElement("td");
-    td.className = "wind-cell";
-    const val = values[idx];
-    if (val == null) {
-      td.classList.add("wind-cell--empty");
-      td.textContent = "—";
-    } else {
-      if (colorFn) td.style.backgroundColor = colorFn(val);
-      td.textContent = formatFn ? formatFn(val, idx) : val;
-    }
-    if (idx === currentHourIdx) td.classList.add("wind-cell--now");
-    tr.appendChild(td);
-  }
-
-  table.appendChild(tr);
+function makeEmptyCell(idx, currentHourIdx) {
+  const td = makeCell(idx, currentHourIdx);
+  td.classList.add("wind-cell--empty");
+  td.textContent = "—";
+  return td;
 }
 
 // --------------- Main Render ---------------
@@ -277,11 +252,10 @@ function render() {
   const container = document.getElementById("grid-container");
   const existing = container.querySelector(".forecast-table");
   if (existing) existing.remove();
-
   if (!state.data) return;
 
-  const { wind, weather, marine } = state.data;
-  const { times, models } = wind;
+  const { forecast, marine } = state.data;
+  const { times, windModels, weatherCode, precip } = forecast;
   const isSummary = state.viewMode === "summary";
 
   const indices = [];
@@ -291,121 +265,136 @@ function render() {
   }
 
   const dayGroups = buildDayGroups(times, indices);
-  const currentHourIdx = findCurrentHourIdx(times, indices);
+  const nowIdx = findCurrentHourIdx(times, indices);
 
-  // Build marine index mapping (marine times may be shorter)
+  // Marine time mapping
   const marineMap = new Map();
   if (marine) {
     for (let mi = 0; mi < marine.times.length; mi++) {
       marineMap.set(marine.times[mi].getTime(), mi);
     }
   }
+  function mIdx(windIdx) {
+    return marineMap.get(times[windIdx].getTime());
+  }
 
   const table = document.createElement("table");
   table.className = "forecast-table";
 
-  // ---- Day header row ----
+  // ---- Day headers ----
   const dayRow = document.createElement("tr");
-  const dayCorner = document.createElement("th");
-  dayCorner.className = "day-header model-cell";
-  dayRow.appendChild(dayCorner);
-  for (const group of dayGroups) {
+  dayRow.appendChild(Object.assign(document.createElement("th"), { className: "day-header model-cell" }));
+  for (const g of dayGroups) {
     const th = document.createElement("th");
     th.className = "day-header";
-    th.colSpan = group.indices.length;
-    th.textContent = group.label;
-    if (group.indices.includes(currentHourIdx)) th.classList.add("day-header--now");
+    th.colSpan = g.indices.length;
+    th.textContent = g.label;
+    if (g.indices.includes(nowIdx)) th.classList.add("day-header--now");
     dayRow.appendChild(th);
   }
   table.appendChild(dayRow);
 
-  // ---- Hour header row ----
+  // ---- Hour headers ----
   const hourRow = document.createElement("tr");
-  const hourCorner = document.createElement("th");
-  hourCorner.className = "hour-header model-cell";
-  hourRow.appendChild(hourCorner);
+  hourRow.appendChild(Object.assign(document.createElement("th"), { className: "hour-header model-cell" }));
   for (const idx of indices) {
     const th = document.createElement("th");
     th.className = "hour-header";
     const h = times[idx].getHours();
     const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
-    const suffix = h < 12 ? "a" : "p";
-    th.textContent = `${h12}${suffix}`;
-    if (idx === currentHourIdx) th.classList.add("hour-header--now");
+    th.textContent = `${h12}${h < 12 ? "a" : "p"}`;
+    if (idx === nowIdx) th.classList.add("hour-header--now");
     hourRow.appendChild(th);
   }
   table.appendChild(hourRow);
 
-  // ---- Weather conditions row ----
-  if (weather) {
-    const wxRow = document.createElement("tr");
-    wxRow.className = "weather-row";
-    const wxLabel = document.createElement("td");
-    wxLabel.className = "model-cell";
-    wxLabel.textContent = "Conditions";
-    wxRow.appendChild(wxLabel);
-    for (const idx of indices) {
-      const td = document.createElement("td");
-      td.className = "wind-cell wx-cell";
-      const code = weather.weatherCode[idx];
-      td.textContent = weatherIcon(code);
-      if (idx === currentHourIdx) td.classList.add("wind-cell--now");
-      wxRow.appendChild(td);
+  // ---- Weather conditions ----
+  const wxRow = document.createElement("tr");
+  wxRow.className = "weather-row";
+  wxRow.appendChild(Object.assign(document.createElement("td"), { className: "model-cell", textContent: "Conditions" }));
+  for (const idx of indices) {
+    const td = makeCell(idx, nowIdx);
+    td.className += " wx-cell";
+    td.textContent = weatherIcon(weatherCode[idx]);
+    wxRow.appendChild(td);
+  }
+  table.appendChild(wxRow);
+
+  // ---- Rain ----
+  const rainRow = document.createElement("tr");
+  rainRow.appendChild(Object.assign(document.createElement("td"), { className: "model-cell", textContent: "Rain in" }));
+  for (const idx of indices) {
+    const td = makeCell(idx, nowIdx);
+    const v = precip[idx];
+    if (v != null && v >= 0.01) {
+      td.style.backgroundColor = "var(--precip-rain)";
+      td.textContent = v.toFixed(2);
     }
-    table.appendChild(wxRow);
+    rainRow.appendChild(td);
+  }
+  table.appendChild(rainRow);
 
-    addDataRow(table, "Temp °F", indices, weather.temps, currentHourIdx,
-      tempColor, (v) => Math.round(v));
+  // ---- Temp section ----
+  addSectionHeader(table, "Temp °F", indices.length);
 
-    addDataRow(table, "Rain in", indices, weather.precip, currentHourIdx,
-      (v) => v >= 0.01 ? "var(--precip-rain)" : "", (v) => v >= 0.01 ? v.toFixed(2) : "");
+  for (const model of windModels) {
+    const tr = document.createElement("tr");
+    tr.appendChild(Object.assign(document.createElement("td"), { className: "model-cell", textContent: `${model.label} ${model.res}` }));
+    for (const idx of indices) {
+      const temp = model.temps[idx];
+      if (temp == null) {
+        tr.appendChild(makeEmptyCell(idx, nowIdx));
+      } else {
+        const td = makeCell(idx, nowIdx);
+        td.style.backgroundColor = tempColor(temp);
+        td.textContent = Math.round(temp);
+        tr.appendChild(td);
+      }
+    }
+    table.appendChild(tr);
   }
 
-  // ---- Wind section header ----
+  // ---- Wind section ----
   addSectionHeader(table, "Wind mph", indices.length);
 
-  // ---- Wind model rows ----
-  for (const model of models) {
+  for (const model of windModels) {
     const tr = document.createElement("tr");
-    const labelCell = document.createElement("td");
-    labelCell.className = "model-cell";
-    labelCell.textContent = `${model.label} ${model.res}`;
-    tr.appendChild(labelCell);
+    tr.appendChild(Object.assign(document.createElement("td"), { className: "model-cell", textContent: `${model.label} ${model.res}` }));
 
     for (const idx of indices) {
-      const td = document.createElement("td");
-      td.className = "wind-cell";
       const speed = model.speeds[idx];
       const gust = model.gusts[idx];
       const dir = model.dirs[idx];
 
       if (speed == null) {
-        td.classList.add("wind-cell--empty");
-        td.textContent = "—";
-      } else {
-        td.style.backgroundColor = windColor(speed);
-        const speedSpan = document.createElement("span");
-        speedSpan.className = "wind-cell__speed";
-        speedSpan.textContent = Math.round(speed);
-        td.appendChild(speedSpan);
-
-        const arrowSpan = document.createElement("span");
-        arrowSpan.className = "wind-cell__arrow";
-        arrowSpan.textContent = dirArrow(dir);
-        if (dir != null) {
-          arrowSpan.style.display = "inline-block";
-          arrowSpan.style.transform = dirRotation(dir);
-        }
-        td.appendChild(arrowSpan);
-
-        if (gust != null) {
-          const gustSpan = document.createElement("span");
-          gustSpan.className = "wind-cell__gust";
-          gustSpan.textContent = Math.round(gust);
-          td.appendChild(gustSpan);
-        }
+        tr.appendChild(makeEmptyCell(idx, nowIdx));
+        continue;
       }
-      if (idx === currentHourIdx) td.classList.add("wind-cell--now");
+
+      const td = makeCell(idx, nowIdx);
+      td.style.backgroundColor = windColor(speed);
+
+      const speedSpan = document.createElement("span");
+      speedSpan.className = "wind-cell__speed";
+      speedSpan.textContent = Math.round(speed);
+      td.appendChild(speedSpan);
+
+      const arrowSpan = document.createElement("span");
+      arrowSpan.className = "wind-cell__arrow";
+      arrowSpan.textContent = dirArrow(dir);
+      if (dir != null) {
+        arrowSpan.style.display = "inline-block";
+        arrowSpan.style.transform = dirRotation(dir);
+      }
+      td.appendChild(arrowSpan);
+
+      if (gust != null) {
+        const gustSpan = document.createElement("span");
+        gustSpan.className = "wind-cell__gust";
+        gustSpan.textContent = Math.round(gust);
+        td.appendChild(gustSpan);
+      }
+
       tr.appendChild(td);
     }
     table.appendChild(tr);
@@ -415,123 +404,67 @@ function render() {
   if (marine) {
     addSectionHeader(table, "Swell ft", indices.length);
 
-    // Helper to get marine value at a wind-grid time index
-    function marineVal(arr, windIdx) {
-      const t = times[windIdx].getTime();
-      const mi = marineMap.get(t);
-      return mi !== undefined ? arr[mi] : null;
-    }
+    for (const model of marine.marineModels) {
+      // Skip model if it has zero non-null swell data
+      const hasSwellData = model.swellHeight.some((v) => v != null);
+      const hasWaveData = model.waveHeight.some((v) => v != null);
+      if (!hasSwellData && !hasWaveData) continue;
 
-    // Wave height row
-    const whRow = document.createElement("tr");
-    const whLabel = document.createElement("td");
-    whLabel.className = "model-cell";
-    whLabel.textContent = "Wave Ht";
-    whRow.appendChild(whLabel);
-    for (const idx of indices) {
-      const td = document.createElement("td");
-      td.className = "wind-cell";
-      const h = marineVal(marine.waveHeight, idx);
-      if (h == null) {
-        td.classList.add("wind-cell--empty");
-        td.textContent = "—";
-      } else {
-        td.style.backgroundColor = swellColor(h);
-        td.textContent = h.toFixed(1);
-      }
-      if (idx === currentHourIdx) td.classList.add("wind-cell--now");
-      whRow.appendChild(td);
-    }
-    table.appendChild(whRow);
+      const tr = document.createElement("tr");
+      tr.appendChild(Object.assign(document.createElement("td"), { className: "model-cell", textContent: model.label }));
 
-    // Swell height + period + direction row
-    const swRow = document.createElement("tr");
-    const swLabel = document.createElement("td");
-    swLabel.className = "model-cell";
-    swLabel.textContent = "Swell";
-    swRow.appendChild(swLabel);
-    for (const idx of indices) {
-      const td = document.createElement("td");
-      td.className = "wind-cell";
-      const h = marineVal(marine.swellHeight, idx);
-      const p = marineVal(marine.swellPeriod, idx);
-      const d = marineVal(marine.swellDir, idx);
-      if (h == null) {
-        td.classList.add("wind-cell--empty");
-        td.textContent = "—";
-      } else {
-        td.style.backgroundColor = swellColor(h);
+      for (const idx of indices) {
+        const mi = mIdx(idx);
+        const wh = mi !== undefined ? model.waveHeight[mi] : null;
+        const sh = mi !== undefined ? model.swellHeight[mi] : null;
+        const sp = mi !== undefined ? model.swellPeriod[mi] : null;
+        const sd = mi !== undefined ? model.swellDir[mi] : null;
+
+        const height = sh != null ? sh : wh;
+
+        if (height == null) {
+          tr.appendChild(makeEmptyCell(idx, nowIdx));
+          continue;
+        }
+
+        const td = makeCell(idx, nowIdx);
+        td.style.backgroundColor = swellColor(height);
+
         const htSpan = document.createElement("span");
         htSpan.className = "wind-cell__speed";
-        htSpan.textContent = h.toFixed(1);
+        htSpan.textContent = height.toFixed(1);
         td.appendChild(htSpan);
 
-        const arrowSpan = document.createElement("span");
-        arrowSpan.className = "wind-cell__arrow";
-        arrowSpan.textContent = dirArrow(d);
-        if (d != null) {
+        if (sd != null) {
+          const arrowSpan = document.createElement("span");
+          arrowSpan.className = "wind-cell__arrow";
+          arrowSpan.textContent = "↓";
           arrowSpan.style.display = "inline-block";
-          arrowSpan.style.transform = dirRotation(d);
+          arrowSpan.style.transform = dirRotation(sd);
+          td.appendChild(arrowSpan);
         }
-        td.appendChild(arrowSpan);
 
-        if (p != null) {
+        if (sp != null) {
           const perSpan = document.createElement("span");
           perSpan.className = "wind-cell__gust";
-          perSpan.textContent = Math.round(p) + "s";
+          perSpan.textContent = Math.round(sp) + "s";
           td.appendChild(perSpan);
         }
-      }
-      if (idx === currentHourIdx) td.classList.add("wind-cell--now");
-      td.appendChild(document.createTextNode(""));
-      swRow.appendChild(td);
-    }
-    table.appendChild(swRow);
 
-    // Wave period row
-    addDataRow(table, "Period", indices,
-      indices.map((i) => marineVal(marine.wavePeriod, i)),
-      currentHourIdx, null, (v) => Math.round(v) + "s");
-
-    // Wave direction row
-    const wdRow = document.createElement("tr");
-    const wdLabel = document.createElement("td");
-    wdLabel.className = "model-cell";
-    wdLabel.textContent = "Wave Dir";
-    wdRow.appendChild(wdLabel);
-    for (const idx of indices) {
-      const td = document.createElement("td");
-      td.className = "wind-cell";
-      const d = marineVal(marine.waveDir, idx);
-      if (d == null) {
-        td.classList.add("wind-cell--empty");
-        td.textContent = "—";
-      } else {
-        const arrowSpan = document.createElement("span");
-        arrowSpan.className = "wind-cell__arrow";
-        arrowSpan.textContent = "↓";
-        arrowSpan.style.display = "inline-block";
-        arrowSpan.style.transform = dirRotation(d);
-        arrowSpan.style.fontSize = "16px";
-        td.appendChild(arrowSpan);
+        tr.appendChild(td);
       }
-      if (idx === currentHourIdx) td.classList.add("wind-cell--now");
-      wdRow.appendChild(td);
+      table.appendChild(tr);
     }
-    table.appendChild(wdRow);
   }
 
   container.appendChild(table);
 
-  // Auto-scroll to current hour
-  const nowCell =
-    container.querySelector(".wind-cell--now") ||
-    container.querySelector(".hour-header--now");
+  // Auto-scroll to now
+  const nowCell = container.querySelector(".wind-cell--now") || container.querySelector(".hour-header--now");
   if (nowCell) {
-    const containerRect = container.getBoundingClientRect();
-    const cellRect = nowCell.getBoundingClientRect();
-    const offset = cellRect.left - containerRect.left;
-    container.scrollLeft = container.scrollLeft + offset - containerRect.width / 3;
+    const cr = container.getBoundingClientRect();
+    const nr = nowCell.getBoundingClientRect();
+    container.scrollLeft += nr.left - cr.left - cr.width / 3;
   }
 }
 
@@ -548,37 +481,23 @@ function updateLocationDisplay() {
 }
 
 function updateViewToggle() {
-  const btnDetailed = document.getElementById("btn-detailed");
-  const btnSummary = document.getElementById("btn-summary");
-  const container = document.getElementById("grid-container");
-  btnDetailed.classList.toggle("view-toggle__btn--active", state.viewMode === "detailed");
-  btnSummary.classList.toggle("view-toggle__btn--active", state.viewMode === "summary");
-  container.classList.toggle("grid-container--summary", state.viewMode === "summary");
+  const btnD = document.getElementById("btn-detailed");
+  const btnS = document.getElementById("btn-summary");
+  const c = document.getElementById("grid-container");
+  btnD.classList.toggle("view-toggle__btn--active", state.viewMode === "detailed");
+  btnS.classList.toggle("view-toggle__btn--active", state.viewMode === "summary");
+  c.classList.toggle("grid-container--summary", state.viewMode === "summary");
 }
 
 function bindEvents() {
-  document.getElementById("btn-detailed").addEventListener("click", () => {
-    state.viewMode = "detailed";
-    updateViewToggle();
-    render();
-  });
-  document.getElementById("btn-summary").addEventListener("click", () => {
-    state.viewMode = "summary";
-    updateViewToggle();
-    render();
-  });
-  document.getElementById("retry-btn").addEventListener("click", () => {
-    loadForecast();
-  });
-  document.getElementById("update-location-btn").addEventListener("click", async () => {
-    await detectAndSetLocation();
-    loadForecast();
-  });
+  document.getElementById("btn-detailed").addEventListener("click", () => { state.viewMode = "detailed"; updateViewToggle(); render(); });
+  document.getElementById("btn-summary").addEventListener("click", () => { state.viewMode = "summary"; updateViewToggle(); render(); });
+  document.getElementById("retry-btn").addEventListener("click", () => loadForecast());
+  document.getElementById("update-location-btn").addEventListener("click", async () => { await detectAndSetLocation(); loadForecast(); });
 }
 
 async function loadForecast() {
   if (!state.location) return;
-
   const loading = document.getElementById("loading");
   const error = document.getElementById("error");
   const container = document.getElementById("grid-container");
@@ -591,21 +510,18 @@ async function loadForecast() {
 
   try {
     const loc = state.location;
-    const [windJson, weatherJson, marineJson] = await Promise.all([
-      fetchJson(buildWindUrl(loc)),
-      fetchJson(buildWeatherUrl(loc)),
+    const [forecastJson, marineJson] = await Promise.all([
+      fetchJson(buildForecastUrl(loc)),
       fetchJson(buildMarineUrl(loc)).catch(() => null),
     ]);
 
     state.data = {
-      wind: parseWindResponse(windJson),
-      weather: parseWeatherResponse(weatherJson),
+      forecast: parseForecastResponse(forecastJson),
       marine: marineJson ? parseMarineResponse(marineJson) : null,
     };
 
-    const now = new Date();
     document.getElementById("last-updated").textContent =
-      "Updated " + now.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
+      "Updated " + new Date().toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 
     loading.hidden = true;
     render();
@@ -621,7 +537,6 @@ async function detectAndSetLocation() {
   const loading = document.getElementById("loading");
   loading.hidden = false;
   loading.textContent = "Detecting your location…";
-
   try {
     const coords = await requestGeolocation();
     state.location = { lat: coords.lat, lon: coords.lon, tz: detectTimezone() };
@@ -630,30 +545,19 @@ async function detectAndSetLocation() {
     loading.textContent = "Loading forecast data…";
   } catch (err) {
     console.error("Geolocation failed:", err);
-    loading.textContent = "Loading forecast data…";
     loading.hidden = true;
     const error = document.getElementById("error");
-    error.querySelector("p").textContent =
-      "Location access denied. Please allow location access and try again.";
+    error.querySelector("p").textContent = "Location access denied. Please allow location access and try again.";
     error.hidden = false;
   }
 }
 
 async function init() {
   bindEvents();
-  if (window.innerWidth <= 600) {
-    state.viewMode = "summary";
-    updateViewToggle();
-  }
+  if (window.innerWidth <= 600) { state.viewMode = "summary"; updateViewToggle(); }
   const saved = getSavedLocation();
-  if (saved) {
-    state.location = saved;
-    updateLocationDisplay();
-    loadForecast();
-  } else {
-    await detectAndSetLocation();
-    loadForecast();
-  }
+  if (saved) { state.location = saved; updateLocationDisplay(); loadForecast(); }
+  else { await detectAndSetLocation(); loadForecast(); }
 }
 
 init();

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MyWeather — Wind Forecast Comparison</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="header">
+    <h1 class="header__title">MyWeather</h1>
+    <div class="header__controls">
+      <select id="spot-select" class="spot-select"></select>
+      <span id="last-updated" class="last-updated"></span>
+    </div>
+  </header>
+
+  <div class="view-toggle">
+    <button id="btn-detailed" class="view-toggle__btn view-toggle__btn--active">Detailed</button>
+    <button id="btn-summary" class="view-toggle__btn">Summary</button>
+  </div>
+
+  <div id="grid-container" class="grid-container">
+    <div id="loading" class="loading">Loading forecast data…</div>
+    <div id="error" class="error" hidden>
+      <p>Couldn't fetch forecast data.</p>
+      <button id="retry-btn" class="retry-btn">Retry</button>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -99,17 +99,26 @@ async function findNearestTideStation(lat, lon) {
   } catch (e) {}
 
   const json = await fetchJson(NOAA_STATIONS_URL);
-  let best = null, bestDist = Infinity;
-  for (const s of json.stations) {
-    const dlat = s.lat - lat;
-    const dlon = s.lng - lon;
-    const dist = dlat * dlat + dlon * dlon;
-    if (dist < bestDist) { bestDist = dist; best = s; }
-  }
+  const sorted = json.stations
+    .map((s) => ({ id: s.id, name: s.name, dist: (s.lat - lat) ** 2 + (s.lng - lon) ** 2 }))
+    .sort((a, b) => a.dist - b.dist);
 
-  const result = { key: cacheKey, id: best.id, name: best.name };
-  localStorage.setItem(TIDE_CACHE_KEY, JSON.stringify(result));
-  return result;
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const today = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+
+  for (const candidate of sorted.slice(0, 5)) {
+    try {
+      const testUrl = `${NOAA_TIDE_BASE}?begin_date=${today}&range=24&station=${candidate.id}&product=predictions&datum=MLLW&units=english&time_zone=lst_ldt&interval=h&format=json`;
+      const test = await fetchJson(testUrl);
+      if (test.predictions && test.predictions.length > 0) {
+        const result = { key: cacheKey, id: candidate.id, name: candidate.name };
+        localStorage.setItem(TIDE_CACHE_KEY, JSON.stringify(result));
+        return result;
+      }
+    } catch (e) {}
+  }
+  return null;
 }
 
 function buildTideUrl(stationId) {

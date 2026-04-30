@@ -598,8 +598,16 @@ function render() {
   if (tides && tides.size > 0) {
     addSectionHeader(table, "Tide ft", indices.length);
     const tr = document.createElement("tr");
-    const label = tideStationName || "NOAA";
-    tr.appendChild(Object.assign(document.createElement("td"), { className: "model-cell", textContent: label }));
+    const labelTd = document.createElement("td");
+    labelTd.className = "model-cell";
+    labelTd.textContent = "Tide";
+    if (tideStationName) {
+      const sub = document.createElement("span");
+      sub.className = "tide-station-name";
+      sub.textContent = tideStationName;
+      labelTd.appendChild(sub);
+    }
+    tr.appendChild(labelTd);
     for (const idx of indices) {
       const level = tides.get(times[idx].getTime());
       if (level == null) {

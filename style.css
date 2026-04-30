@@ -383,6 +383,16 @@ body {
   padding: 0;
 }
 
+/* Tide station name */
+.tide-station-name {
+  display: block;
+  font-size: 9px;
+  font-weight: 400;
+  color: var(--color-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* Weather icons row */
 .wx-cell {
   font-size: 14px;

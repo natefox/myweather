@@ -17,6 +17,11 @@ const MARINE_MODELS = [
 const API_BASE = "https://api.open-meteo.com/v1/forecast";
 const MARINE_API_BASE = "https://marine-api.open-meteo.com/v1/marine";
 const STORAGE_KEY = "myweather-location";
+const SHORE_NORMAL_KEY = "myweather-shore-normal";
+const DEFAULT_SHORE_NORMAL = 225;
+const TIDE_STATION_KEY = "myweather-tide-station";
+const DEFAULT_TIDE_STATION = "9410580";
+const NOAA_TIDE_BASE = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter";
 
 let state = {
   location: null,
@@ -83,6 +88,42 @@ function buildMarineUrl(loc) {
     timezone: loc.tz,
   });
   return `${MARINE_API_BASE}?${params.toString()}`;
+}
+
+function getTideStation() {
+  try {
+    const saved = localStorage.getItem(TIDE_STATION_KEY);
+    if (saved) return saved;
+  } catch (e) {}
+  return DEFAULT_TIDE_STATION;
+}
+
+function buildTideUrl() {
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const beginDate = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+  const params = new URLSearchParams({
+    begin_date: beginDate,
+    range: 384,
+    station: getTideStation(),
+    product: "predictions",
+    datum: "MLLW",
+    units: "english",
+    time_zone: "lst_ldt",
+    interval: "h",
+    format: "json",
+  });
+  return `${NOAA_TIDE_BASE}?${params.toString()}`;
+}
+
+function parseTideResponse(json) {
+  if (!json || !json.predictions) return null;
+  const tideMap = new Map();
+  for (const p of json.predictions) {
+    const d = new Date(p.t.replace(" ", "T"));
+    tideMap.set(d.getTime(), parseFloat(p.v));
+  }
+  return tideMap;
 }
 
 async function fetchJson(url) {
@@ -174,6 +215,15 @@ function tempColor(f) {
   return "var(--temp-hot)";
 }
 
+function tideColor(level) {
+  if (level == null) return "";
+  if (level <= 0) return "var(--tide-very-low)";
+  if (level <= 2) return "var(--tide-low)";
+  if (level <= 4) return "var(--tide-mid)";
+  if (level <= 5.5) return "var(--tide-high)";
+  return "var(--tide-very-high)";
+}
+
 function weatherIcon(code) {
   if (code == null) return "";
   if (code === 0) return "☀️";
@@ -192,6 +242,39 @@ function dirArrow(deg) {
 
 function dirRotation(deg) {
   return deg != null ? `rotate(${deg}deg)` : "";
+}
+
+// --------------- Shore / Offshore Detection ---------------
+
+function getShoreNormal() {
+  try {
+    const saved = localStorage.getItem(SHORE_NORMAL_KEY);
+    if (saved != null) return parseFloat(saved);
+  } catch (e) {}
+  return DEFAULT_SHORE_NORMAL;
+}
+
+function angleDiff(a, b) {
+  let d = Math.abs(a - b) % 360;
+  return d > 180 ? 360 - d : d;
+}
+
+function circularMean(angles) {
+  let sinSum = 0, cosSum = 0;
+  for (const a of angles) {
+    const rad = a * Math.PI / 180;
+    sinSum += Math.sin(rad);
+    cosSum += Math.cos(rad);
+  }
+  return (Math.atan2(sinSum, cosSum) * 180 / Math.PI + 360) % 360;
+}
+
+function shoreType(windDir) {
+  if (windDir == null) return null;
+  const diff = angleDiff(windDir, getShoreNormal());
+  if (diff > 120) return "offshore";
+  if (diff < 60) return "onshore";
+  return "cross";
 }
 
 // --------------- Render Helpers ---------------
@@ -254,7 +337,7 @@ function render() {
   if (existing) existing.remove();
   if (!state.data) return;
 
-  const { forecast, marine } = state.data;
+  const { forecast, marine, tides } = state.data;
   const { times, windModels, weatherCode, precip } = forecast;
   const isSummary = state.viewMode === "summary";
 
@@ -457,7 +540,37 @@ function render() {
     }
   }
 
+  // ---- Tide section ----
+  if (tides && tides.size > 0) {
+    addSectionHeader(table, "Tide ft", indices.length);
+    const tr = document.createElement("tr");
+    tr.appendChild(Object.assign(document.createElement("td"), { className: "model-cell", textContent: "NOAA" }));
+    for (const idx of indices) {
+      const level = tides.get(times[idx].getTime());
+      if (level == null) {
+        tr.appendChild(makeEmptyCell(idx, nowIdx));
+      } else {
+        const td = makeCell(idx, nowIdx);
+        td.style.backgroundColor = tideColor(level);
+        const valSpan = document.createElement("span");
+        valSpan.className = "wind-cell__speed";
+        valSpan.textContent = level.toFixed(1);
+        td.appendChild(valSpan);
+        tr.appendChild(td);
+      }
+    }
+    table.appendChild(tr);
+  }
+
   container.appendChild(table);
+
+  // Offshore/onshore highlight for current hour
+  const nowDirs = windModels.map((m) => m.dirs[nowIdx]).filter((d) => d != null);
+  container.classList.remove("grid-container--offshore", "grid-container--onshore", "grid-container--cross");
+  if (nowDirs.length > 0) {
+    const type = shoreType(circularMean(nowDirs));
+    if (type) container.classList.add("grid-container--" + type);
+  }
 
   // Auto-scroll to now
   const nowCell = container.querySelector(".wind-cell--now") || container.querySelector(".hour-header--now");
@@ -503,21 +616,23 @@ async function loadForecast() {
   const container = document.getElementById("grid-container");
 
   loading.hidden = false;
-  loading.textContent = "Loading forecast data…";
+  document.getElementById("loading-text").textContent = "Loading forecast data…";
   error.hidden = true;
   const existing = container.querySelector(".forecast-table");
   if (existing) existing.remove();
 
   try {
     const loc = state.location;
-    const [forecastJson, marineJson] = await Promise.all([
+    const [forecastJson, marineJson, tideJson] = await Promise.all([
       fetchJson(buildForecastUrl(loc)),
       fetchJson(buildMarineUrl(loc)).catch(() => null),
+      fetchJson(buildTideUrl()).catch(() => null),
     ]);
 
     state.data = {
       forecast: parseForecastResponse(forecastJson),
       marine: marineJson ? parseMarineResponse(marineJson) : null,
+      tides: tideJson ? parseTideResponse(tideJson) : null,
     };
 
     document.getElementById("last-updated").textContent =
@@ -536,13 +651,13 @@ async function loadForecast() {
 async function detectAndSetLocation() {
   const loading = document.getElementById("loading");
   loading.hidden = false;
-  loading.textContent = "Detecting your location…";
+  document.getElementById("loading-text").textContent = "Detecting your location…";
   try {
     const coords = await requestGeolocation();
     state.location = { lat: coords.lat, lon: coords.lon, tz: detectTimezone() };
     saveLocation(state.location);
     updateLocationDisplay();
-    loading.textContent = "Loading forecast data…";
+    document.getElementById("loading-text").textContent = "Loading forecast data…";
   } catch (err) {
     console.error("Geolocation failed:", err);
     loading.hidden = true;
